@@ -301,6 +301,9 @@ async fn main() {
 	// RSS Subscriptions
 	app.at("/r/:sub.rss").get(|r| subreddit::rss(r).boxed());
 
+	// JSON feeds (proxied Reddit JSON)
+	app.at("/r/:sub.json").get(|r| subreddit::json_feed(r).boxed());
+
 	// Subreddit services
 	app
 		.at("/r/:sub")

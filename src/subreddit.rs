@@ -1,7 +1,7 @@
 #![allow(clippy::cmp_owned)]
 
 use crate::utils::{
-	Post, Preferences, Subreddit, catch_random, error, filter_posts, format_num, format_url, get_filters, info, nsfw_landing, param, redirect, rewrite_urls, setting, template, to_absolute_url, val
+	Post, Preferences, Subreddit, catch_random, error, filter_posts, format_num, format_url, get_filters, info, nsfw_landing, param, redirect, rewrite_json_urls, rewrite_urls, setting, template, to_absolute_url, val
 };
 use crate::{client::json, server::RequestExt, server::ResponseExt};
 use crate::{config, utils};
@@ -713,6 +713,34 @@ fn get_mime_type(url: &str) -> &'static str {
         "svg" => "image/svg+xml",
         _ => "application/octet-stream",
     }
+}
+
+/// Proxies the raw Reddit JSON listing for a subreddit, with Reddit URLs
+/// rewritten to their Redlib equivalents (media proxies, post links, etc.).
+pub async fn json_feed(req: Request<Body>) -> Result<Response<Body>, String> {
+	if config::get_setting("REDLIB_ENABLE_JSON").is_none() {
+		return Ok(error(req, "JSON feeds are disabled on this instance.").await.unwrap_or_default());
+	}
+
+	use hyper::header::CONTENT_TYPE;
+
+	// Get subreddit
+	let sub = req.param("sub").unwrap_or_default();
+	let post_sort = req.cookie("post_sort").map_or_else(|| "hot".to_string(), |c| c.value().to_string());
+	let sort = req.param("sort").unwrap_or_else(|| req.param("id").unwrap_or(post_sort));
+
+	// Get path
+	let path = format!("/r/{sub}/{sort}.json?{}&raw_json=1", req.uri().query().unwrap_or_default());
+
+	// Get the raw JSON from Reddit and rewrite the URLs it contains
+	let mut data = json(path, false).await?;
+	rewrite_json_urls(&mut data);
+
+	// Create the HTTP response
+	let mut res = Response::new(Body::from(data.to_string()));
+	res.headers_mut().insert(CONTENT_TYPE, hyper::header::HeaderValue::from_static("application/json"));
+
+	Ok(res)
 }
 
 #[cfg(test)]

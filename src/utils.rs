@@ -1072,6 +1072,53 @@ pub fn format_url(url: &str) -> String {
 	}
 }
 
+/// Recursively rewrite Reddit URLs in a raw Reddit JSON response to their
+/// Redlib equivalents (media proxies, links, etc.), so consumers of the JSON
+/// feeds stay on this instance. Rewritten URLs are made absolute with
+/// `REDLIB_FULL_URL` when it is set, as needed by external consumers.
+pub fn rewrite_json_urls(value: &mut Value) {
+	match value {
+		Value::Object(map) => {
+			for (key, val) in map.iter_mut() {
+				match val {
+					// HTML bodies have their own rewriting rules for anchors and previews
+					Value::String(s) if key.ends_with("_html") => *s = rewrite_urls(s),
+					_ => rewrite_json_urls(val),
+				}
+			}
+		}
+		Value::Array(values) => {
+			for val in values.iter_mut() {
+				rewrite_json_urls(val);
+			}
+		}
+		Value::String(s) if s.starts_with("https://") || s.starts_with("http://") => {
+			// Unwrap Reddit's click-tracking redirector to the real destination
+			if let Some(target) = unwrap_outbound_url(s) {
+				*s = target;
+			}
+
+			// `format_url` returns a Redlib-relative path for known Reddit
+			// domains, and the input unchanged for any other URL
+			let formatted = format_url(s);
+			if formatted.starts_with('/') {
+				*s = to_absolute_url(&formatted);
+			}
+		}
+		_ => {}
+	}
+}
+
+/// Returns the destination URL carried in the `url` parameter of an
+/// `out.reddit.com` click-tracking link, or `None` for any other URL.
+fn unwrap_outbound_url(url: &str) -> Option<String> {
+	let parsed = Url::parse(url).ok()?;
+	if parsed.domain() != Some("out.reddit.com") {
+		return None;
+	}
+	parsed.query_pairs().find(|(key, _)| key == "url").map(|(_, value)| value.to_string())
+}
+
 static REGEX_BULLET: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?m)^- (.*)$").unwrap());
 static REGEX_BULLET_CONSECUTIVE_LINES: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"</ul>\n<ul>").unwrap());
 
@@ -1451,7 +1498,7 @@ pub fn to_absolute_url(relative_path: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-	use super::{deflate_compress, deflate_decompress, format_num, format_url, render_bullet_lists, rewrite_emotes, rewrite_urls, url_path_basename, Post, Preferences};
+	use super::{deflate_compress, deflate_decompress, format_num, format_url, render_bullet_lists, rewrite_emotes, rewrite_json_urls, rewrite_urls, url_path_basename, Post, Preferences};
 
 	#[test]
 	fn format_num_works() {
@@ -1518,6 +1565,56 @@ mod tests {
 		assert_eq!(format_url("nsfw"), "");
 		assert_eq!(format_url("spoiler"), "");
 	}
+	#[test]
+	fn test_rewrite_json_urls() {
+		let mut json = serde_json::json!({
+			"kind": "Listing",
+			"data": {
+				"children": [{
+					"kind": "t3",
+					"data": {
+						"url": "https://i.redd.it/foobar.jpg",
+						"thumbnail": "https://b.thumbs.redditmedia.com/XYZ.jpg",
+						"permalink": "/r/rust/comments/abcdef/some_post/",
+						"selftext_html": "<div class=\"md\"><a href=\"https://www.reddit.com/r/rust/\">crosslink</a></div>",
+						"preview": {
+							"images": [{"source": {"url": "https://preview.redd.it/qwerty.jpg?auto=webp&s=asdf", "width": 100}}]
+						},
+						"media": {"reddit_video": {"fallback_url": "https://v.redd.it/foo/DASH_360.mp4?source=fallback"}},
+					"outbound_link": {"url": "https://out.reddit.com/t3_abcdef?url=https%3A%2F%2Fexample.com%2Fblog%2Fpost&token=SECRET"},
+						"domain": "example.com",
+						"external_url": "https://example.com/article",
+						"score": 42,
+						"over_18": false
+					}
+				}]
+			}
+		});
+
+		rewrite_json_urls(&mut json);
+
+		let post = &json["data"]["children"][0]["data"];
+
+		// Reddit media URLs are rewritten to Redlib's proxies
+		assert_eq!(post["url"], "/img/foobar.jpg");
+		assert_eq!(post["thumbnail"], "/thumb/b/XYZ.jpg");
+		assert_eq!(post["preview"]["images"][0]["source"]["url"], "/preview/pre/qwerty.jpg?auto=webp&s=asdf");
+		assert_eq!(post["media"]["reddit_video"]["fallback_url"], "/vid/foo/360.mp4");
+
+		// Click-tracking outbound links are unwrapped to their destination
+		assert_eq!(post["outbound_link"]["url"], "https://example.com/blog/post");
+
+		// Reddit links in HTML bodies are rewritten to Redlib
+		assert_eq!(post["selftext_html"], "<div class=\"md\"><a href=\"/r/rust/\">crosslink</a></div>");
+
+		// Relative permalinks, external URLs, and non-string values are untouched
+		assert_eq!(post["permalink"], "/r/rust/comments/abcdef/some_post/");
+		assert_eq!(post["external_url"], "https://example.com/article");
+		assert_eq!(post["domain"], "example.com");
+		assert_eq!(post["score"], 42);
+		assert_eq!(post["over_18"], false);
+	}
+
 	#[test]
 	fn serialize_prefs() {
 		let prefs = Preferences {

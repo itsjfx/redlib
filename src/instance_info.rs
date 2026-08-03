@@ -127,6 +127,7 @@ impl InstanceInfo {
 				["SFW only", &convert(&self.config.sfw_only)],
 				["Pushshift frontend", &convert(&self.config.pushshift)],
 				["RSS enabled", &convert(&self.config.enable_rss)],
+				["JSON feeds enabled", &convert(&self.config.enable_json)],
 				["Full URL", &convert(&self.config.full_url)],
 				["Remove default feeds", &convert(&self.config.default_remove_default_feeds)],
 				//TODO: fallback to crate::config::DEFAULT_PUSHSHIFT_FRONTEND
@@ -169,6 +170,7 @@ impl InstanceInfo {
 				SFW only: {:?}\n
 				Pushshift frontend: {:?}\n
 				RSS enabled: {:?}\n
+				JSON feeds enabled: {:?}\n
 				Full URL: {:?}\n
 				Remove default feeds: {:?}\n
                 Config:\n
@@ -196,6 +198,7 @@ impl InstanceInfo {
 					self.compile_mode,
 					self.config.sfw_only,
 					self.config.enable_rss,
+					self.config.enable_json,
 					self.config.full_url,
 					self.config.default_remove_default_feeds,
 					self.config.pushshift,
