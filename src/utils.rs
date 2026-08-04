@@ -784,6 +784,18 @@ pub fn filter_posts(posts: &mut Vec<Post>, filters: &HashSet<String>) -> (u64, b
 	}
 }
 
+/// Filters a `Vec<Post>` by minimum score and/or minimum comment count. A
+/// post is removed if it falls below either given threshold (matching
+/// RSS-Bridge's Reddit bridge). Posts with hidden scores are kept.
+pub fn filter_posts_by_stats(posts: &mut Vec<Post>, min_score: Option<i64>, min_comments: Option<i64>) {
+	if min_score.is_none() && min_comments.is_none() {
+		return;
+	}
+	// A post with a hidden score parses as Err and is never considered below.
+	let below = |value: &str, min: Option<i64>| min.is_some_and(|min| value.parse::<i64>().is_ok_and(|v| v < min));
+	posts.retain(|p| !below(&p.score.1, min_score) && !below(&p.comments.1, min_comments));
+}
+
 /// Creates a [`Post`] from a provided JSON.
 pub async fn parse_post(post: &Value) -> Post {
 	// Grab UTC time as unix timestamp
@@ -1498,7 +1510,7 @@ pub fn to_absolute_url(relative_path: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-	use super::{deflate_compress, deflate_decompress, format_num, format_url, render_bullet_lists, rewrite_emotes, rewrite_json_urls, rewrite_urls, url_path_basename, Post, Preferences};
+	use super::{deflate_compress, deflate_decompress, filter_posts_by_stats, format_num, format_url, parse_post, render_bullet_lists, rewrite_emotes, rewrite_json_urls, rewrite_urls, url_path_basename, Post, Preferences};
 
 	#[test]
 	fn format_num_works() {
@@ -1507,6 +1519,40 @@ mod tests {
 		assert_eq!(format_num(1999), ("2.0k".to_string(), "1999".to_string()));
 		assert_eq!(format_num(1001), ("1.0k".to_string(), "1001".to_string()));
 		assert_eq!(format_num(1_999_999), ("2.0m".to_string(), "1999999".to_string()));
+	}
+
+	#[tokio::test(flavor = "multi_thread")]
+	async fn test_filter_posts_by_stats() {
+		async fn make_posts() -> Vec<Post> {
+			let mut posts = Vec::new();
+			for (score, comments) in [(500, 5), (50, 100), (5, 5), (0, 100)] {
+				posts.push(parse_post(&serde_json::json!({"data": {"score": score, "num_comments": comments, "created_utc": 0.0}})).await);
+			}
+			// `Post::fetch` represents posts with hidden scores like this
+			posts[3].score = ("\u{2022}".to_string(), "Hidden".to_string());
+			posts
+		}
+
+		// No thresholds is a no-op
+		let mut posts = make_posts().await;
+		filter_posts_by_stats(&mut posts, None, None);
+		assert_eq!(posts.len(), 4);
+
+		// Score threshold; posts with hidden scores are kept
+		let mut posts = make_posts().await;
+		filter_posts_by_stats(&mut posts, Some(100), None);
+		assert_eq!(posts.iter().map(|p| p.score.1.as_str()).collect::<Vec<_>>(), ["500", "Hidden"]);
+
+		// Comments threshold
+		let mut posts = make_posts().await;
+		filter_posts_by_stats(&mut posts, None, Some(50));
+		assert_eq!(posts.iter().map(|p| p.comments.1.as_str()).collect::<Vec<_>>(), ["100", "100"]);
+
+		// Both thresholds: a post failing either one is dropped
+		let mut posts = make_posts().await;
+		filter_posts_by_stats(&mut posts, Some(100), Some(50));
+		assert_eq!(posts.len(), 1);
+		assert_eq!(posts[0].score.1, "Hidden");
 	}
 
 	#[test]

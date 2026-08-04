@@ -419,6 +419,19 @@ Assign a default value for each instance-specific setting by passing environment
 | `ENABLE_JSON`             | `["on", "off"]` | `off`                  | Enables JSON feeds (e.g. `/r/rust.json`), proxying Reddit's JSON with links rewritten to this instance.   |
 | `FULL_URL`                | String          | (empty)                | Allows for proper URLs (for now, only needed by RSS and JSON feeds)                                       |
 
+### RSS feed parameters
+
+RSS feeds accept optional query parameters; the filters are modeled on RSS-Bridge's Reddit bridge:
+
+| Parameter      | Feeds                                | Values                                                                       | Description                                                                                                          |
+|----------------|--------------------------------------|------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------|
+| `min_score`    | `/r/<sub>.rss`, `/user/<name>.rss`   | Integer                                                                      | Drop posts with a lower score.                                                                                       |
+| `min_comments` | `/r/<sub>.rss`, `/user/<name>.rss`   | Integer                                                                      | Drop posts with fewer comments. If combined with `min_score`, posts failing either threshold are dropped.            |
+| `sort`         | `/r/<sub>.rss`, `/user/<name>.rss`   | `hot` (default), `new`, `top`, `rising`, `controversial` (no `rising` for users) | Sort order of the feed. Overrides the `post_sort` cookie.                                                            |
+| `t`            | `/r/<sub>.rss`, `/user/<name>.rss`   | `hour`, `day`, `week`, `month`, `year`, `all`                                | Time window, applies to `sort=top` and `sort=controversial`, e.g. `/r/rust.rss?sort=top&t=week`.                     |
+| `limit`        | `/r/<sub>.rss`, `/user/<name>.rss`   | Integer 1-100                                                                | Number of posts in the feed (Reddit's default is 25).                                                                |
+| `after`        | `/r/<sub>.rss`, `/user/<name>.rss`   | Post fullname, e.g. `t3_abc123`                                              | Only return posts listed after the given one (pagination cursor).                                                    |
+
 ## Default user settings
 
 Assign a default value for each user-modifiable setting by passing environment variables to Redlib in the format `REDLIB_DEFAULT_{Y}`. Replace `{Y}` with the setting name (see list below) in capital letters.

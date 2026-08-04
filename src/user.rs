@@ -1,7 +1,7 @@
 #![allow(clippy::cmp_owned)]
 use crate::client::json;
 use crate::server::RequestExt;
-use crate::utils::{error, filter_posts, format_url, get_filters, nsfw_landing, param, setting, template, Post, Preferences, User};
+use crate::utils::{error, filter_posts, filter_posts_by_stats, format_url, get_filters, nsfw_landing, param, setting, template, Post, Preferences, User};
 use crate::{config, utils};
 use askama::Template;
 use chrono::DateTime;
@@ -145,6 +145,11 @@ pub async fn rss(req: Request<Body>) -> Result<Response<Body>, String> {
 
 	let listing = req.param("listing").unwrap_or_else(|| "overview".to_string());
 
+	// Get filter params
+	let lookup = format!("?{}", req.uri().query().unwrap_or_default());
+	let min_score = param(&lookup, "min_score").and_then(|v| v.parse::<i64>().ok());
+	let min_comments = param(&lookup, "min_comments").and_then(|v| v.parse::<i64>().ok());
+
 	// Get path
 	let path = format!("/user/{user_str}/{listing}.json?{}&raw_json=1", req.uri().query().unwrap_or_default(),);
 
@@ -152,7 +157,8 @@ pub async fn rss(req: Request<Body>) -> Result<Response<Body>, String> {
 	let user_obj = user(&user_str).await.unwrap_or_default();
 
 	// Get posts
-	let (posts, _) = Post::fetch(&path, false).await?;
+	let (mut posts, _) = Post::fetch(&path, false).await?;
+	filter_posts_by_stats(&mut posts, min_score, min_comments);
 
 	// Build the RSS feed
 	let channel = ChannelBuilder::default()

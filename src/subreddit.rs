@@ -1,7 +1,7 @@
 #![allow(clippy::cmp_owned)]
 
 use crate::utils::{
-	Post, Preferences, Subreddit, catch_random, error, filter_posts, format_num, format_url, get_filters, info, nsfw_landing, param, redirect, rewrite_json_urls, rewrite_urls, setting, template, to_absolute_url, val
+	Post, Preferences, Subreddit, catch_random, error, filter_posts, filter_posts_by_stats, format_num, format_url, get_filters, info, nsfw_landing, param, redirect, rewrite_json_urls, rewrite_urls, setting, template, to_absolute_url, val
 };
 use crate::{client::json, server::RequestExt, server::ResponseExt};
 use crate::{config, utils};
@@ -598,10 +598,20 @@ pub async fn rss(req: Request<Body>) -> Result<Response<Body>, String> {
 	// Get subreddit
 	let sub = req.param("sub").unwrap_or_default();
 	let post_sort = req.cookie("post_sort").map_or_else(|| "hot".to_string(), |c| c.value().to_string());
-	let sort = req.param("sort").unwrap_or_else(|| req.param("id").unwrap_or(post_sort));
+
+	// Get filter params; a `sort` query parameter overrides the sort cookie,
+	// since feed readers can't send cookies
+	let query = req.uri().query().unwrap_or_default().to_string();
+	let lookup = format!("?{query}");
+	let sort = match param(&lookup, "sort").as_deref() {
+		Some(sort @ ("hot" | "new" | "top" | "rising" | "controversial")) => sort.to_string(),
+		_ => req.param("sort").unwrap_or_else(|| req.param("id").unwrap_or(post_sort)),
+	};
+	let min_score = param(&lookup, "min_score").and_then(|v| v.parse::<i64>().ok());
+	let min_comments = param(&lookup, "min_comments").and_then(|v| v.parse::<i64>().ok());
 
 	// Get path
-	let path = format!("/r/{sub}/{sort}.json?{}", req.uri().query().unwrap_or_default());
+	let path = format!("/r/{sub}/{sort}.json?{query}");
 
 	// Get subreddit link
 	let subreddit_link: String = format!("{}/r/{sub}", config::get_setting("REDLIB_FULL_URL").unwrap_or_default());
@@ -610,7 +620,8 @@ pub async fn rss(req: Request<Body>) -> Result<Response<Body>, String> {
 	let subreddit = subreddit(&sub, false).await?;
 
 	// Get posts
-	let (posts, _) = Post::fetch(&path, false).await?;
+	let (mut posts, _) = Post::fetch(&path, false).await?;
+	filter_posts_by_stats(&mut posts, min_score, min_comments);
 
 	// Build the RSS feed
 	let channel = ChannelBuilder::default()
