@@ -1508,6 +1508,17 @@ pub fn to_absolute_url(relative_path: &str) -> String {
 	format!("{}{}", config::get_setting("REDLIB_FULL_URL").unwrap_or_default(), relative_path)
 }
 
+/// Returns a line with the post's current score and comment count, linked to
+/// its comments page, for prepending to feed item content.
+pub fn rss_stats_line(post: &Post) -> String {
+	let score = if post.score.1.parse::<i64>().is_ok() {
+		format!("{} points", post.score.1)
+	} else {
+		"score hidden".to_string()
+	};
+	format!("<p><a href='{}'>{score} | {} comments</a></p>", to_absolute_url(&post.permalink), post.comments.1)
+}
+
 #[cfg(test)]
 mod tests {
 	use super::{deflate_compress, deflate_decompress, filter_posts_by_stats, format_num, format_url, parse_post, render_bullet_lists, rewrite_emotes, rewrite_json_urls, rewrite_urls, url_path_basename, Post, Preferences};

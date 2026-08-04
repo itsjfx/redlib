@@ -636,9 +636,9 @@ pub async fn rss(req: Request<Body>) -> Result<Response<Body>, String> {
 						title: Some(post.title.to_string()),
 						link: Some(format_url(&utils::get_post_url(&post))),
 						author: Some(post.author.name.to_string()),
-						content: Some(rewrite_urls(&decode_html(&post.body).unwrap())),
+						content: Some(format!("{}{}", utils::rss_stats_line(&post), rewrite_urls(&decode_html(&post.body).unwrap()))),
 						pub_date: Some(DateTime::from_timestamp(post.created_ts as i64, 0).unwrap_or_default().to_rfc2822()),
-						description: Some(format!("<a href='{}'>Comments</a>", to_absolute_url(&post.permalink))),
+						description: Some(utils::rss_stats_line(&post)),
 						..Default::default()
 					};
 

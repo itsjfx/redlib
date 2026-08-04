@@ -167,13 +167,16 @@ pub async fn rss(req: Request<Body>) -> Result<Response<Body>, String> {
 		.items(
 			posts
 				.into_iter()
-				.map(|post| Item {
-					title: Some(post.title.to_string()),
-					link: Some(format_url(&utils::get_post_url(&post))),
-					author: Some(post.author.name),
-					pub_date: Some(DateTime::from_timestamp(post.created_ts as i64, 0).unwrap_or_default().to_rfc2822()),
-					content: Some(rewrite_urls(&decode_html(&post.body).unwrap_or_else(|_| post.body.clone()))),
-					..Default::default()
+				.map(|post| {
+					let stats_line = utils::rss_stats_line(&post);
+					Item {
+						title: Some(post.title.to_string()),
+						link: Some(format_url(&utils::get_post_url(&post))),
+						author: Some(post.author.name),
+						pub_date: Some(DateTime::from_timestamp(post.created_ts as i64, 0).unwrap_or_default().to_rfc2822()),
+						content: Some(format!("{stats_line}{}", rewrite_urls(&decode_html(&post.body).unwrap_or_else(|_| post.body.clone())))),
+						..Default::default()
+					}
 				})
 				.collect::<Vec<_>>(),
 		)
