@@ -432,6 +432,7 @@ RSS feeds accept optional query parameters; the filters are modeled on RSS-Bridg
 | `t`            | `/r/<sub>.rss`, `/user/<name>.rss`   | `hour`, `day`, `week`, `month`, `year`, `all`                                | Time window, applies to `sort=top` and `sort=controversial`, e.g. `/r/rust.rss?sort=top&t=week`.                     |
 | `limit`        | `/r/<sub>.rss`, `/user/<name>.rss`   | Integer 1-100                                                                | Number of posts in the feed (Reddit's default is 25).                                                                |
 | `after`        | `/r/<sub>.rss`, `/user/<name>.rss`   | Post fullname, e.g. `t3_abc123`                                              | Only return posts listed after the given one (pagination cursor).                                                    |
+| `embed_images` | `/r/<sub>.rss`                       | `off`                                                                        | Set to `off` to stop embedding post images (all gallery images, video/gif posters) in item content. On by default.   |
 
 ## Default user settings
 

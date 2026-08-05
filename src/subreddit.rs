@@ -7,7 +7,7 @@ use crate::{client::json, server::RequestExt, server::ResponseExt};
 use crate::{config, utils};
 use askama::Template;
 use cookie::Cookie;
-use htmlescape::decode_html;
+use htmlescape::{decode_html, encode_minimal};
 use hyper::{Body, Request, Response};
 
 use chrono::DateTime;
@@ -610,6 +610,8 @@ pub async fn rss(req: Request<Body>) -> Result<Response<Body>, String> {
 	let min_score = param(&lookup, "min_score").and_then(|v| v.parse::<i64>().ok());
 	let min_comments = param(&lookup, "min_comments").and_then(|v| v.parse::<i64>().ok());
 	let include_hidden = param(&lookup, "include_hidden").as_deref() == Some("on");
+	// Embed post images inline in item content unless disabled with `?embed_images=off`
+	let embed_images = param(&lookup, "embed_images").as_deref() != Some("off");
 
 	// Get path
 	let path = format!("/r/{sub}/{sort}.json?{query}");
@@ -637,13 +639,18 @@ pub async fn rss(req: Request<Body>) -> Result<Response<Body>, String> {
 						title: Some(post.title.to_string()),
 						link: Some(format_url(&utils::get_post_url(&post))),
 						author: Some(post.author.name.to_string()),
-						content: Some(format!("{}{}", utils::rss_stats_line(&post), rewrite_urls(&decode_html(&post.body).unwrap()))),
+						content: Some(format!(
+							"{}{}{}",
+							utils::rss_stats_line(&post),
+							if embed_images { rss_media_html(&post) } else { String::new() },
+							rewrite_urls(&decode_html(&post.body).unwrap())
+						)),
 						pub_date: Some(DateTime::from_timestamp(post.created_ts as i64, 0).unwrap_or_default().to_rfc2822()),
 						description: Some(utils::rss_stats_line(&post)),
 						..Default::default()
 					};
 
-					apply_enclosure(&mut item, &post);
+					apply_enclosure(&mut item, &post, embed_images);
 					item
 				})
 				.collect::<Vec<_>>(),
@@ -661,7 +668,7 @@ pub async fn rss(req: Request<Body>) -> Result<Response<Body>, String> {
 }
 
 // Set enclosure image for RSS feed item
-fn apply_enclosure(item: &mut Item, post: &Post) {
+fn apply_enclosure(item: &mut Item, post: &Post, embed_images: bool) {
 	item.set_enclosure(get_rss_image(&post));
 
 	// Embed the number of gallery images in description and content since
@@ -674,13 +681,16 @@ fn apply_enclosure(item: &mut Item, post: &Post) {
 			)
 		);
 
-		if let Some(content) = item.content() {
-			let new_content = format!(
-				"{}<br/>{}",
-				item.description().unwrap_or(""),
-				content,
-			);
-			item.set_content(new_content);
+		// The gallery link is redundant when every image is embedded in content
+		if !embed_images {
+			if let Some(content) = item.content() {
+				let new_content = format!(
+					"{}<br/>{}",
+					item.description().unwrap_or(""),
+					content,
+				);
+				item.set_content(new_content);
+			}
 		}
 	}
 
@@ -701,6 +711,36 @@ fn get_rss_image(post: &Post) -> Option<Enclosure> {
 		enclosure.set_length("0");
 		enclosure
 	})
+}
+
+// Build inline HTML embedding a post's media images, for including in feed
+// item content since enclosures can only carry the first image
+fn rss_media_html(post: &Post) -> String {
+	let alt = decode_html(&post.title).unwrap_or_else(|_| post.title.clone());
+	match post.post_type.as_str() {
+		"image" => decode_html(&post.media.url).ok().map_or_else(String::new, |url| rss_img(&url, &alt, "")),
+		"gallery" => post
+			.gallery
+			.iter()
+			.filter_map(|media| {
+				let caption = decode_html(&media.caption).unwrap_or_else(|_| media.caption.clone());
+				decode_html(&media.url).ok().map(|url| rss_img(&url, &alt, &caption))
+			})
+			.collect(),
+		"gif" | "video" => decode_html(&post.media.poster).ok().map_or_else(String::new, |url| rss_img(&url, &alt, "")),
+		_ => String::new(),
+	}
+}
+
+// Render a single inline image for feed item content, wrapped in a <figure>
+// with a <figcaption> when the media has a caption
+fn rss_img(url: &str, alt: &str, caption: &str) -> String {
+	let img = format!("<img src='{}' alt='{}'/>", encode_minimal(&to_absolute_url(url)), encode_minimal(if caption.is_empty() { alt } else { caption }));
+	if caption.is_empty() {
+		img
+	} else {
+		format!("<figure>{img}<figcaption>{}</figcaption></figure>", encode_minimal(caption))
+	}
 }
 
 /// Determines the MIME type based on file extension in a URL.
