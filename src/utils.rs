@@ -786,14 +786,24 @@ pub fn filter_posts(posts: &mut Vec<Post>, filters: &HashSet<String>) -> (u64, b
 
 /// Filters a `Vec<Post>` by minimum score and/or minimum comment count. A
 /// post is removed if it falls below either given threshold (matching
-/// RSS-Bridge's Reddit bridge). Posts with hidden scores are kept.
-pub fn filter_posts_by_stats(posts: &mut Vec<Post>, min_score: Option<i64>, min_comments: Option<i64>) {
+/// RSS-Bridge's Reddit bridge). Posts whose score is still hidden can't be
+/// compared against `min_score` and are removed too, unless `include_hidden`
+/// is set.
+pub fn filter_posts_by_stats(posts: &mut Vec<Post>, min_score: Option<i64>, min_comments: Option<i64>, include_hidden: bool) {
 	if min_score.is_none() && min_comments.is_none() {
 		return;
 	}
-	// A post with a hidden score parses as Err and is never considered below.
-	let below = |value: &str, min: Option<i64>| min.is_some_and(|min| value.parse::<i64>().is_ok_and(|v| v < min));
-	posts.retain(|p| !below(&p.score.1, min_score) && !below(&p.comments.1, min_comments));
+	posts.retain(|p| {
+		let score_ok = match min_score {
+			None => true,
+			Some(min) => match p.score.1.parse::<i64>() {
+				Ok(score) => score >= min,
+				Err(_) => include_hidden,
+			},
+		};
+		let comments_ok = !min_comments.is_some_and(|min| p.comments.1.parse::<i64>().is_ok_and(|c| c < min));
+		score_ok && comments_ok
+	});
 }
 
 /// Creates a [`Post`] from a provided JSON.
@@ -1546,22 +1556,27 @@ mod tests {
 
 		// No thresholds is a no-op
 		let mut posts = make_posts().await;
-		filter_posts_by_stats(&mut posts, None, None);
+		filter_posts_by_stats(&mut posts, None, None, false);
 		assert_eq!(posts.len(), 4);
 
-		// Score threshold; posts with hidden scores are kept
+		// Score threshold; posts with hidden scores are dropped by default
 		let mut posts = make_posts().await;
-		filter_posts_by_stats(&mut posts, Some(100), None);
+		filter_posts_by_stats(&mut posts, Some(100), None, false);
+		assert_eq!(posts.iter().map(|p| p.score.1.as_str()).collect::<Vec<_>>(), ["500"]);
+
+		// ...but kept when hidden scores are opted into
+		let mut posts = make_posts().await;
+		filter_posts_by_stats(&mut posts, Some(100), None, true);
 		assert_eq!(posts.iter().map(|p| p.score.1.as_str()).collect::<Vec<_>>(), ["500", "Hidden"]);
 
-		// Comments threshold
+		// Comments threshold alone never drops hidden-score posts
 		let mut posts = make_posts().await;
-		filter_posts_by_stats(&mut posts, None, Some(50));
+		filter_posts_by_stats(&mut posts, None, Some(50), false);
 		assert_eq!(posts.iter().map(|p| p.comments.1.as_str()).collect::<Vec<_>>(), ["100", "100"]);
 
 		// Both thresholds: a post failing either one is dropped
 		let mut posts = make_posts().await;
-		filter_posts_by_stats(&mut posts, Some(100), Some(50));
+		filter_posts_by_stats(&mut posts, Some(100), Some(50), true);
 		assert_eq!(posts.len(), 1);
 		assert_eq!(posts[0].score.1, "Hidden");
 	}

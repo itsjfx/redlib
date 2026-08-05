@@ -149,6 +149,7 @@ pub async fn rss(req: Request<Body>) -> Result<Response<Body>, String> {
 	let lookup = format!("?{}", req.uri().query().unwrap_or_default());
 	let min_score = param(&lookup, "min_score").and_then(|v| v.parse::<i64>().ok());
 	let min_comments = param(&lookup, "min_comments").and_then(|v| v.parse::<i64>().ok());
+	let include_hidden = param(&lookup, "include_hidden").as_deref() == Some("on");
 
 	// Get path
 	let path = format!("/user/{user_str}/{listing}.json?{}&raw_json=1", req.uri().query().unwrap_or_default(),);
@@ -158,7 +159,7 @@ pub async fn rss(req: Request<Body>) -> Result<Response<Body>, String> {
 
 	// Get posts
 	let (mut posts, _) = Post::fetch(&path, false).await?;
-	filter_posts_by_stats(&mut posts, min_score, min_comments);
+	filter_posts_by_stats(&mut posts, min_score, min_comments, include_hidden);
 
 	// Build the RSS feed
 	let channel = ChannelBuilder::default()
