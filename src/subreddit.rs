@@ -1,7 +1,8 @@
 #![allow(clippy::cmp_owned)]
 
 use crate::utils::{
-	Post, Preferences, Subreddit, catch_random, error, filter_posts, filter_posts_by_stats, format_num, format_url, get_filters, info, nsfw_landing, param, redirect, rewrite_json_urls, rewrite_urls, setting, template, to_absolute_url, val
+	catch_random, error, filter_posts, filter_posts_by_stats, format_num, format_url, get_filters, info, nsfw_landing, param, redirect, rewrite_json_urls, rewrite_urls,
+	setting, template, to_absolute_url, val, Post, Preferences, Subreddit,
 };
 use crate::{client::json, server::RequestExt, server::ResponseExt};
 use crate::{config, utils};
@@ -12,7 +13,7 @@ use hyper::{Body, Request, Response};
 
 use chrono::DateTime;
 use regex::Regex;
-use rss::{ChannelBuilder, Item, Enclosure};
+use rss::{ChannelBuilder, Enclosure, Item};
 use std::sync::LazyLock;
 use time::{Duration, OffsetDateTime};
 
@@ -167,8 +168,8 @@ pub async fn community(req: Request<Body>) -> Result<Response<Body>, String> {
 				let no_posts = posts.is_empty();
 				let all_posts_hidden_nsfw = !no_posts && (posts.iter().all(|p| p.flags.nsfw) && setting(&req, "show_nsfw") != "on");
 				if sort == "new" {
-					posts.sort_by(|a, b| b.created_ts.cmp(&a.created_ts));
-					posts.sort_by(|a, b| b.flags.stickied.cmp(&a.flags.stickied));
+					posts.sort_by_key(|post| std::cmp::Reverse(post.created_ts));
+					posts.sort_by_key(|post| std::cmp::Reverse(post.flags.stickied));
 				}
 				Ok(template(&SubredditTemplate {
 					sub,
@@ -597,24 +598,19 @@ pub async fn rss(req: Request<Body>) -> Result<Response<Body>, String> {
 
 	// Get subreddit
 	let sub = req.param("sub").unwrap_or_default();
-	let post_sort = req.cookie("post_sort").map_or_else(|| "hot".to_string(), |c| c.value().to_string());
-
-	// Get filter params; a `sort` query parameter overrides the sort cookie,
-	// since feed readers can't send cookies
-	let query = req.uri().query().unwrap_or_default().to_string();
-	let lookup = format!("?{query}");
-	let sort = match param(&lookup, "sort").as_deref() {
-		Some(sort @ ("hot" | "new" | "top" | "rising" | "controversial")) => sort.to_string(),
-		_ => req.param("sort").unwrap_or_else(|| req.param("id").unwrap_or(post_sort)),
+	let query = format!("?{}", req.uri().query().unwrap_or_default());
+	let sort = match param(&query, "sort").as_deref() {
+		Some(s @ ("hot" | "new" | "top" | "rising" | "controversial")) => s.to_string(),
+		_ => "hot".to_string(),
 	};
-	let min_score = param(&lookup, "min_score").and_then(|v| v.parse::<i64>().ok());
-	let min_comments = param(&lookup, "min_comments").and_then(|v| v.parse::<i64>().ok());
-	let include_hidden = param(&lookup, "include_hidden").as_deref() == Some("on");
+	let min_score = param(&query, "min_score").and_then(|v| v.parse::<i64>().ok());
+	let min_comments = param(&query, "min_comments").and_then(|v| v.parse::<i64>().ok());
+	let include_hidden = param(&query, "include_hidden").as_deref() == Some("on");
 	// Embed post images inline in item content unless disabled with `?embed_images=off`
-	let embed_images = param(&lookup, "embed_images").as_deref() != Some("off");
+	let embed_images = param(&query, "embed_images").as_deref() != Some("off");
 
 	// Get path
-	let path = format!("/r/{sub}/{sort}.json?{query}");
+	let path = format!("/r/{sub}/{sort}.json?{}", req.uri().query().unwrap_or_default());
 
 	// Get subreddit link
 	let subreddit_link: String = format!("{}/r/{sub}", config::get_setting("REDLIB_FULL_URL").unwrap_or_default());
@@ -669,37 +665,27 @@ pub async fn rss(req: Request<Body>) -> Result<Response<Body>, String> {
 
 // Set enclosure image for RSS feed item
 fn apply_enclosure(item: &mut Item, post: &Post, embed_images: bool) {
-	item.set_enclosure(get_rss_image(&post));
+	item.set_enclosure(get_rss_image(post));
 
 	// Embed the number of gallery images in description and content since
 	// only the first image in the gallery is used for the enclosure
 	if post.post_type == "gallery" && post.gallery.len() > 1 {
-		item.set_description(
-			format!("<a href='{}'>Gallery with {} images</a>",
-				to_absolute_url(&post.permalink),
-				post.gallery.len()
-			)
-		);
+		item.set_description(format!("<a href='{}'>Gallery with {} images</a>", to_absolute_url(&post.permalink), post.gallery.len()));
 
 		// The gallery link is redundant when every image is embedded in content
 		if !embed_images {
 			if let Some(content) = item.content() {
-				let new_content = format!(
-					"{}<br/>{}",
-					item.description().unwrap_or(""),
-					content,
-				);
+				let new_content = format!("{}<br/>{}", item.description().unwrap_or(""), content,);
 				item.set_content(new_content);
 			}
 		}
 	}
-
 }
 
 fn get_rss_image(post: &Post) -> Option<Enclosure> {
 	let image_url = match post.post_type.as_str() {
 		"image" => Some(post.media.url.clone()),
-		"gallery" => post.gallery.get(0).and_then(|media| decode_html(&media.url).ok()),
+		"gallery" => post.gallery.first().and_then(|media| decode_html(&media.url).ok()),
 		"gif" | "video" => decode_html(&post.media.poster).ok(),
 		_ => None,
 	};
@@ -735,7 +721,11 @@ fn rss_media_html(post: &Post) -> String {
 // Render a single inline image for feed item content, wrapped in a <figure>
 // with a <figcaption> when the media has a caption
 fn rss_img(url: &str, alt: &str, caption: &str) -> String {
-	let img = format!("<img src='{}' alt='{}'/>", encode_minimal(&to_absolute_url(url)), encode_minimal(if caption.is_empty() { alt } else { caption }));
+	let img = format!(
+		"<img src='{}' alt='{}'/>",
+		encode_minimal(&to_absolute_url(url)),
+		encode_minimal(if caption.is_empty() { alt } else { caption })
+	);
 	if caption.is_empty() {
 		img
 	} else {
@@ -746,25 +736,21 @@ fn rss_img(url: &str, alt: &str, caption: &str) -> String {
 /// Determines the MIME type based on file extension in a URL.
 /// Handles both absolute and relative URLs with query parameters.
 fn get_mime_type(url: &str) -> &'static str {
-    // Extract the path component, removing query parameters
-    let path = url.split('?').next().unwrap_or(url);
-    
-    // Get the file extension (everything after the last dot)
-    let extension = path
-        .rsplit('.')
-        .next()
-        .unwrap_or("")
-        .to_lowercase();
-    
-    // Match common image extensions
-    match extension.as_str() {
-        "jpg" | "jpeg" => "image/jpeg",
-        "png" => "image/png",
-        "gif" => "image/gif",
-        "webp" => "image/webp",
-        "svg" => "image/svg+xml",
-        _ => "application/octet-stream",
-    }
+	// Extract the path component, removing query parameters
+	let path = url.split('?').next().unwrap_or(url);
+
+	// Get the file extension (everything after the last dot)
+	let extension = path.rsplit('.').next().unwrap_or("").to_lowercase();
+
+	// Match common image extensions
+	match extension.as_str() {
+		"jpg" | "jpeg" => "image/jpeg",
+		"png" => "image/png",
+		"gif" => "image/gif",
+		"webp" => "image/webp",
+		"svg" => "image/svg+xml",
+		_ => "application/octet-stream",
+	}
 }
 
 /// Proxies the raw Reddit JSON listing for a subreddit, with Reddit URLs
