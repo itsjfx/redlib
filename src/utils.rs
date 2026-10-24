@@ -1525,7 +1525,10 @@ pub fn rss_stats_line(post: &Post) -> String {
 
 #[cfg(test)]
 mod tests {
-	use super::{deflate_compress, deflate_decompress, filter_posts_by_stats, format_num, format_url, parse_post, render_bullet_lists, rewrite_emotes, rewrite_json_urls, rewrite_urls, url_path_basename, Post, Preferences};
+	use super::{
+		deflate_compress, deflate_decompress, filter_posts_by_stats, format_num, format_url, parse_post, render_bullet_lists, rewrite_emotes, rewrite_json_urls, rewrite_urls,
+		url_path_basename, Post, Preferences,
+	};
 
 	#[test]
 	fn format_num_works() {
